@@ -24,6 +24,23 @@ func (test Case) run(gron Gronx) (bool, error) {
 	return gron.IsDue(test.Expr, ref)
 }
 
+type CaseGetPrev struct {
+	Expr   string `json:"expr"`
+	Ref    string `json:"ref"`
+	Expect string `json:"expect"`
+}
+
+func (test CaseGetPrev) run(gron Gronx) (*time.Time, error) {
+	if test.Ref == "" {
+		return gron.GetPrev(test.Expr)
+	}
+
+	ref, err := time.Parse("2006-01-02 15:04:05", test.Ref)
+	abort(err)
+
+	return gron.GetPrev(test.Expr, ref)
+}
+
 func TestNormalize(t *testing.T) {
 	tests := map[string]string{
 		"*   *  *\t*\n*":        "* * * * *",
@@ -81,6 +98,31 @@ func TestIsDue(t *testing.T) {
 			}
 			if err == nil {
 				t.Errorf("expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestGetPrev(t *testing.T) {
+	gron := New()
+
+	for _, test := range testcasesGetPrev() {
+		t.Run("get prev "+test.Expr, func(t *testing.T) {
+			prevDue, _ := test.run(gron)
+
+			if test.Expect == "" {
+				if prevDue != nil {
+					t.Error("did not expect a previous due")
+				}
+			} else {
+				if prevDue == nil {
+					t.Error("expected a previous due, got nil")
+					return
+				}
+				expect, _ := time.Parse("2006-01-02 15:04:05", test.Expect)
+				if !(*prevDue).Equal(expect) {
+					t.Errorf("expected %v, got %v", expect, *prevDue)
+				}
 			}
 		})
 	}
@@ -171,6 +213,21 @@ func testcases() []Case {
 		{"@weekly", "2019-11-14 00:00:00", false},
 		{"0 12 * * ?", "2020-08-20 00:00:00", false},
 		{"0 12 ? * *", "2020-08-20 00:00:00", false},
+	}
+}
+
+func testcasesGetPrev() []CaseGetPrev {
+	return []CaseGetPrev{
+		{"* * * * *", "2011-07-01 13:46:45", "2011-07-01 13:46:00"},
+		{"13 * * * *", "2021-01-01 14:56:30", "2021-01-01 14:13:00"},
+		{"10-20/2 * * * *", "2021-01-01 14:56:30", "2021-01-01 14:20:00"},
+		{"10-20/2 * * * *", "2021-01-01 14:15:30", "2021-01-01 14:14:00"},
+		{"15-20/2 * * * *", "2021-01-01 14:14:30", "2021-01-01 13:19:00"},
+		{"* 21 * * *", "2021-01-01 02:15:30", "2020-12-31 21:59:00"},
+		{"* * 29 2 *", "2021-12-01 02:15:30", "2020-02-29 23:59:00"},
+		{"* * L * *", "2021-12-01 02:15:30", "2021-11-30 23:59:00"},
+		{"* * L * * 2099", "2021-12-01 02:15:30", ""},
+		{"* * 30 2 *", "2021-12-01 02:15:30", ""},
 	}
 }
 

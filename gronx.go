@@ -2,6 +2,7 @@ package gronx
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -26,6 +27,15 @@ var expressions = map[string]string{
 	"@15minutes": "*/15 * * * *",
 	"@30minutes": "0,30 * * * *",
 }
+
+const (
+	PosMinute = iota
+	PosHour
+	PosDayOfMonth
+	PosMonth
+	PosDayOfWeek
+	PosYear
+)
 
 // SpaceRe is regex for whitespace.
 var SpaceRe = regexp.MustCompile(`\s+`)
@@ -102,4 +112,80 @@ func (g *Gronx) IsValid(expr string) bool {
 	_, err := g.IsDue(expr)
 
 	return err == nil
+}
+
+// GetPrev returns the previous time that the cron expression was due.
+func (g *Gronx) GetPrev(expr string, ref ...time.Time) (*time.Time, error) {
+	if len(ref) > 0 {
+		g.C.SetRef(ref[0])
+	} else {
+		g.C.SetRef(time.Now())
+	}
+
+	segs, err := Segments(expr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Maximum number of years we will check to find the previous due date.
+	yearsLeftToCheck := 100
+
+L:
+	// See https://stackoverflow.com/a/322058 for the algorithm to calculate the previous due date.
+	for yearsLeftToCheck > 0 {
+		for _, pos := range []int{PosYear, PosMonth, PosDayOfMonth, PosDayOfWeek, PosHour, PosMinute} {
+			if pos >= len(segs) {
+				continue
+			}
+			seg := segs[pos]
+			if seg != "*" && seg != "?" {
+				due, err := g.C.CheckDue(seg, pos)
+				if err != nil {
+					return nil, err
+				}
+				if !due {
+					prev, yearChanged := getPrevTime(g.C.GetRef(), pos)
+					g.C.SetRef(prev)
+					if yearChanged {
+						yearsLeftToCheck -= 1
+					}
+					continue L
+				}
+			}
+		}
+		break
+	}
+
+	if yearsLeftToCheck == 0 {
+		return nil, fmt.Errorf("could not find previous due for cron expression")
+	}
+
+	// Remove the second and nanosecond portion of the time before returning.
+	res := g.C.GetRef()
+	prevDue := time.Date(res.Year(), res.Month(), res.Day(), res.Hour(), res.Minute(), 0, 0, res.Location())
+
+	return &prevDue, nil
+}
+
+func getPrevTime(ref time.Time, pos int) (time.Time, bool) {
+	var res time.Time
+
+	switch pos {
+	case PosYear:
+		res = time.Date(ref.Year(), 1, 1, 0, 0, 0, 0, ref.Location()).Add(-time.Nanosecond)
+	case PosMonth:
+		res = time.Date(ref.Year(), ref.Month(), 1, 0, 0, 0, 0, ref.Location()).Add(-time.Nanosecond)
+	case PosDayOfMonth:
+		res = time.Date(ref.Year(), ref.Month(), ref.Day(), 0, 0, 0, 0, ref.Location()).Add(-time.Nanosecond)
+	case PosDayOfWeek:
+		res = time.Date(ref.Year(), ref.Month(), ref.Day(), 0, 0, 0, 0, ref.Location()).Add(-time.Nanosecond)
+	case PosHour:
+		res = time.Date(ref.Year(), ref.Month(), ref.Day(), ref.Hour(), 0, 0, 0, ref.Location()).Add(-time.Nanosecond)
+	case PosMinute:
+		res = time.Date(ref.Year(), ref.Month(), ref.Day(), ref.Hour(), ref.Minute(), 0, 0, ref.Location()).Add(-time.Nanosecond)
+	default:
+		panic("Unknown segment position")
+	}
+
+	return res, res.Year() != ref.Year()
 }
